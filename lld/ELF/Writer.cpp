@@ -1627,7 +1627,7 @@ template <class ELFT> void Writer<ELFT>::finalizeAddressDependentContent() {
   ThunkCreator tc;
   AArch64Err843419Patcher a64p;
   ARMErr657417Patcher a32p;
-  script->assignAddresses();
+  script->assignAddresses(AF_None);
   // .ARM.exidx and SHF_LINK_ORDER do not require precise addresses, but they
   // do require the relative addresses of OutputSections because linker scripts
   // can assign Virtual Addresses to OutputSections that are not monotonically
@@ -1656,12 +1656,12 @@ template <class ELFT> void Writer<ELFT>::finalizeAddressDependentContent() {
 
     if (config->fixCortexA53Errata843419) {
       if (changed)
-        script->assignAddresses();
+        script->assignAddresses(AF_None);
       changed |= a64p.createFixes();
     }
     if (config->fixCortexA8) {
       if (changed)
-        script->assignAddresses();
+        script->assignAddresses(AF_None);
       changed |= a32p.createFixes();
     }
 
@@ -1674,7 +1674,7 @@ template <class ELFT> void Writer<ELFT>::finalizeAddressDependentContent() {
         changed |= part.relrDyn->updateAllocSize();
     }
 
-    const Defined *changedSym = script->assignAddresses();
+    const Defined *changedSym = script->assignAddresses(AF_None);
     if (!changed) {
       // Some symbols may be dependent on section addresses. When we break the
       // loop, the symbol values are finalized because a previous
@@ -1688,6 +1688,9 @@ template <class ELFT> void Writer<ELFT>::finalizeAddressDependentContent() {
       }
     }
   }
+
+  script->assignAddresses(AF_FinalPass);
+
   if (!config->relocatable && config->emachine == EM_RISCV)
     riscvFinalizeRelax(pass);
 
@@ -1758,7 +1761,7 @@ template <class ELFT> void Writer<ELFT>::optimizeBasicBlockJumps() {
   assert(config->optimizeBBJumps);
   SmallVector<InputSection *, 0> storage;
 
-  script->assignAddresses();
+  script->assignAddresses(AF_None);
   // For every output section that has executable input sections, this
   // does the following:
   //   1. Deletes all direct jump instructions in input sections that
@@ -1779,7 +1782,7 @@ template <class ELFT> void Writer<ELFT>::optimizeBasicBlockJumps() {
       numDeleted += target->deleteFallThruJmpInsn(sec, sec.file, next);
     }
     if (numDeleted > 0) {
-      script->assignAddresses();
+      script->assignAddresses(AF_None);
       LLVM_DEBUG(llvm::dbgs()
                  << "Removing " << numDeleted << " fall through jumps\n");
     }

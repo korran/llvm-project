@@ -34,6 +34,13 @@ class SectionBase;
 class ThunkSection;
 struct OutputDesc;
 
+enum AssignFlags {
+  AF_None = 0,
+  // This is the address-assignment final pass; region overflow errors should
+  // only be enforced when this is set.
+  AF_FinalPass = (1 << 0),
+};
+
 // This represents an r-value in the linker script.
 struct ExprValue {
   ExprValue(SectionBase *sec, bool forceAbsolute, uint64_t val,
@@ -271,10 +278,10 @@ class LinkerScript final {
   llvm::DenseMap<llvm::CachedHashStringRef, OutputDesc *> nameToOutputSection;
 
   void addSymbol(SymbolAssignment *cmd);
-  void assignSymbol(SymbolAssignment *cmd, bool inSec);
-  void setDot(Expr e, const Twine &loc, bool inSec);
-  void expandOutputSection(uint64_t size);
-  void expandMemoryRegions(uint64_t size);
+  void assignSymbol(SymbolAssignment *cmd, bool inSec, AssignFlags flags);
+  void setDot(Expr e, const Twine &loc, bool inSec, AssignFlags flags);
+  void expandOutputSection(uint64_t size, AssignFlags flags);
+  void expandMemoryRegions(uint64_t size, AssignFlags flags);
 
   SmallVector<InputSectionBase *, 0>
   computeInputSections(const InputSectionDescription *,
@@ -289,7 +296,7 @@ class LinkerScript final {
   std::pair<MemoryRegion *, MemoryRegion *>
   findMemoryRegion(OutputSection *sec, MemoryRegion *hint);
 
-  void assignOffsets(OutputSection *sec);
+  void assignOffsets(OutputSection *sec, AssignFlags flags);
 
   // This captures the local AddressState and makes it accessible
   // deliberately. This is needed as there are some cases where we cannot just
@@ -322,7 +329,7 @@ public:
   bool needsInterpSection();
 
   bool shouldKeep(InputSectionBase *s);
-  const Defined *assignAddresses();
+  const Defined *assignAddresses(AssignFlags flags);
   void allocateHeaders(SmallVector<PhdrEntry *, 0> &phdrs);
   void processSectionCommands();
   void processSymbolAssignments();

@@ -155,30 +155,31 @@ OutputDesc *LinkerScript::getOrCreateOutputSection(StringRef name) {
 
 // Expands the memory region by the specified size.
 static void expandMemoryRegion(MemoryRegion *memRegion, uint64_t size,
-                               StringRef secName) {
+                               StringRef secName, AssignFlags flags) {
   memRegion->curPos += size;
   uint64_t newSize = memRegion->curPos - (memRegion->origin)().getValue();
   uint64_t length = (memRegion->length)().getValue();
-  if (newSize > length)
+  if ((flags & AF_FinalPass) && newSize > length)
     error("section '" + secName + "' will not fit in region '" +
           memRegion->name + "': overflowed by " + Twine(newSize - length) +
           " bytes");
 }
 
-void LinkerScript::expandMemoryRegions(uint64_t size) {
+void LinkerScript::expandMemoryRegions(uint64_t size, AssignFlags flags) {
   if (state->memRegion)
-    expandMemoryRegion(state->memRegion, size, state->outSec->name);
+    expandMemoryRegion(state->memRegion, size, state->outSec->name, flags);
   // Only expand the LMARegion if it is different from memRegion.
   if (state->lmaRegion && state->memRegion != state->lmaRegion)
-    expandMemoryRegion(state->lmaRegion, size, state->outSec->name);
+    expandMemoryRegion(state->lmaRegion, size, state->outSec->name, flags);
 }
 
-void LinkerScript::expandOutputSection(uint64_t size) {
+void LinkerScript::expandOutputSection(uint64_t size, AssignFlags flags) {
   state->outSec->size += size;
-  expandMemoryRegions(size);
+  expandMemoryRegions(size, flags);
 }
 
-void LinkerScript::setDot(Expr e, const Twine &loc, bool inSec) {
+void LinkerScript::setDot(Expr e, const Twine &loc, bool inSec,
+                          AssignFlags flags) {
   uint64_t val = e().getValue();
   if (val < dot && inSec)
     error(loc + ": unable to move location counter backward for: " +
@@ -186,7 +187,7 @@ void LinkerScript::setDot(Expr e, const Twine &loc, bool inSec) {
 
   // Update to location counter means update to section size.
   if (inSec)
-    expandOutputSection(val - dot);
+    expandOutputSection(val - dot, flags);
 
   dot = val;
 }
@@ -364,9 +365,10 @@ void LinkerScript::declareSymbols() {
 // This function is called from assignAddresses, while we are
 // fixing the output section addresses. This function is supposed
 // to set the final value for a given symbol assignment.
-void LinkerScript::assignSymbol(SymbolAssignment *cmd, bool inSec) {
+void LinkerScript::assignSymbol(SymbolAssignment *cmd, bool inSec,
+                                AssignFlags flags) {
   if (cmd->name == ".") {
-    setDot(cmd->expression, cmd->location, inSec);
+    setDot(cmd->expression, cmd->location, inSec, flags);
     return;
   }
 
@@ -957,7 +959,7 @@ static OutputSection *findFirstSection(PhdrEntry *load) {
 
 // This function assigns offsets to input sections and an output section
 // for a single sections command (e.g. ".text { *(.text); }").
-void LinkerScript::assignOffsets(OutputSection *sec) {
+void LinkerScript::assignOffsets(OutputSection *sec, AssignFlags flags) {
   const bool isTbss = (sec->flags & SHF_TLS) && sec->type == SHT_NOBITS;
   const bool sameMemRegion = state->memRegion == sec->memRegion;
   const bool prevLMARegionIsDefault = state->lmaRegion == nullptr;
@@ -979,7 +981,7 @@ void LinkerScript::assignOffsets(OutputSection *sec) {
     if (state->memRegion)
       dot = state->memRegion->curPos;
     if (sec->addrExpr)
-      setDot(sec->addrExpr, sec->location, false);
+      setDot(sec->addrExpr, sec->location, false, flags);
 
     // If the address of the section has been moved forward by an explicit
     // expression so that it now starts past the current curPos of the enclosing
@@ -987,7 +989,7 @@ void LinkerScript::assignOffsets(OutputSection *sec) {
     // between the previous section, if any, and the start of this section.
     if (state->memRegion && state->memRegion->curPos < dot)
       expandMemoryRegion(state->memRegion, dot - state->memRegion->curPos,
-                         sec->name);
+                         sec->name, flags);
   }
 
   state->outSec = sec;
@@ -1000,7 +1002,7 @@ void LinkerScript::assignOffsets(OutputSection *sec) {
     const uint64_t pos = dot;
     dot = alignToPowerOf2(dot, sec->addralign);
     sec->addr = dot;
-    expandMemoryRegions(dot - pos);
+    expandMemoryRegions(dot - pos, flags);
   }
 
   // state->lmaOffset is LMA minus VMA. If LMA is explicitly specified via AT()
@@ -1014,7 +1016,7 @@ void LinkerScript::assignOffsets(OutputSection *sec) {
   } else if (MemoryRegion *mr = sec->lmaRegion) {
     uint64_t lmaStart = alignToPowerOf2(mr->curPos, sec->addralign);
     if (mr->curPos < lmaStart)
-      expandMemoryRegion(mr, lmaStart - mr->curPos, sec->name);
+      expandMemoryRegion(mr, lmaStart - mr->curPos, sec->name, flags);
     state->lmaOffset = lmaStart - dot;
   } else if (!sameMemRegion || !prevLMARegionIsDefault) {
     state->lmaOffset = 0;
@@ -1036,7 +1038,7 @@ void LinkerScript::assignOffsets(OutputSection *sec) {
     // This handles the assignments to symbol or to the dot.
     if (auto *assign = dyn_cast<SymbolAssignment>(cmd)) {
       assign->addr = dot;
-      assignSymbol(assign, true);
+      assignSymbol(assign, true, flags);
       assign->size = dot - assign->addr;
       continue;
     }
@@ -1045,7 +1047,7 @@ void LinkerScript::assignOffsets(OutputSection *sec) {
     if (auto *data = dyn_cast<ByteCommand>(cmd)) {
       data->offset = dot - sec->addr;
       dot += data->size;
-      expandOutputSection(data->size);
+      expandOutputSection(data->size, flags);
       continue;
     }
 
@@ -1062,7 +1064,7 @@ void LinkerScript::assignOffsets(OutputSection *sec) {
       // Update output section size after adding each section. This is so that
       // SIZEOF works correctly in the case below:
       // .foo { *(.aaa) a = SIZEOF(.foo); *(.bbb) }
-      expandOutputSection(dot - pos);
+      expandOutputSection(dot - pos, flags);
     }
   }
 
@@ -1300,7 +1302,7 @@ LinkerScript::AddressState::AddressState() {
 // we also handle rest commands like symbol assignments and ASSERTs.
 // Returns a symbol that has changed its section or value, or nullptr if no
 // symbol has changed.
-const Defined *LinkerScript::assignAddresses() {
+const Defined *LinkerScript::assignAddresses(AssignFlags flags) {
   if (script->hasSectionsCommand) {
     // With a linker script, assignment of addresses to headers is covered by
     // allocateHeaders().
@@ -1322,11 +1324,11 @@ const Defined *LinkerScript::assignAddresses() {
   for (SectionCommand *cmd : sectionCommands) {
     if (auto *assign = dyn_cast<SymbolAssignment>(cmd)) {
       assign->addr = dot;
-      assignSymbol(assign, false);
+      assignSymbol(assign, false, flags);
       assign->size = dot - assign->addr;
       continue;
     }
-    assignOffsets(&cast<OutputDesc>(cmd)->osec);
+    assignOffsets(&cast<OutputDesc>(cmd)->osec, flags);
   }
 
   state = nullptr;
